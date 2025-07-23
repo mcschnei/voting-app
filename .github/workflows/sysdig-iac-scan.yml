@@ -33,7 +33,7 @@ jobs:
         sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
         
         # Sysdig endpoint (default is US)
-        sysdig-secure-url: https://secure.sysdig.com
+        sysdig-secure-url: https://eu1.app.sysdig.com
         
         # Use latest CLI scanner version that supports IaC
         cli-scanner-version: 1.22.3
