@@ -15,46 +15,47 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Sysdig Secure IaC Scan
-      uses: sysdiglabs/sysdig-secure-inline-scan@v1
+    - name: Sysdig IaC Scan
+      id: scan
+      uses: sysdiglabs/scan-action@v5
       with:
-        # Sysdig Secure endpoint URL
-        sysdig-secure-url: https://secure.sysdig.com
+        # Mode of operation - set to "iac" for Infrastructure as Code scanning
+        mode: iac
+        
+        # Path to scan for IaC files
+        iac-scan-path: .
+        
+        # Recursively scan all folders
+        recursive: true
         
         # Sysdig Secure API token - store this as a GitHub secret
         sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
         
-        # Path to scan (current directory by default)
-        path: .
+        # Sysdig Secure endpoint URL (default: https://secure.sysdig.com)
+        sysdig-secure-url: https://secure.sysdig.com
         
-        # IaC scan specific options
-        iac-scan: true
+        # Minimum severity to fail the build (low, medium, high, critical)
+        minimum-severity: high
         
-        # Skip image scanning since this is IaC only
-        skip-upload: true
+        # Fail the build if policy evaluation fails
+        stop-on-failed-policy-eval: true
         
-        # Fail the build on high severity findings (optional)
-        stop-on-failed-policy: true
+        # Fail the build if scanner encounters errors
+        stop-on-processing-error: true
         
-        # Minimum severity to report (low, medium, high, critical)
-        minimum-severity: medium
+        # CLI scanner version (minimum 1.9.0 required for IaC mode)
+        cli-scanner-version: 1.9.0
         
-        # Output format (json, sarif, human)
-        output-format: sarif
-        
-        # Save results to file
-        output-file: sysdig-iac-results.sarif
-        
-    - name: Upload SARIF results to GitHub
+    - name: Upload SARIF results to GitHub Security tab
       uses: github/codeql-action/upload-sarif@v3
-      if: always()
+      if: success() || failure()
       with:
-        sarif_file: sysdig-iac-results.sarif
+        sarif_file: ${{ github.workspace }}/sarif.json
         
     - name: Upload scan results as artifact
       uses: actions/upload-artifact@v4
       if: always()
       with:
         name: sysdig-iac-scan-results
-        path: sysdig-iac-results.sarif
+        path: sarif.json
         retention-days: 30
