@@ -32,7 +32,7 @@ jobs:
         sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
         
         # Sysdig Secure endpoint URL (default: https://secure.sysdig.com)
-        sysdig-secure-url: https://secure.sysdig.com
+        sysdig-secure-url: https://eu1.app.sysdig.com
         
         # Minimum severity to fail the build (low, medium, high, critical)
         minimum-severity: high
