@@ -1,0 +1,59 @@
+# .sysdig/iac-config.yaml
+# Sysdig IaC scanning configuration
+
+# Define which file types to scan
+file_types:
+  - "*.yaml"
+  - "*.yml"
+  - "*.json"
+  - "*.tf"
+  - "Dockerfile*"
+  - "docker-compose*.yml"
+  - "k8s-specifications/*.yaml"
+
+# Exclude certain paths from scanning
+exclude_paths:
+  - "node_modules/"
+  - ".git/"
+  - "vendor/"
+  - "test/"
+  - "*.test.yaml"
+
+# Custom policies (examples)
+custom_policies:
+  # Check for resource limits in Kubernetes deployments
+  - id: "CUSTOM-K8S-001"
+    name: "Kubernetes containers must have resource limits"
+    severity: "high"
+    resource_type: "kubernetes.deployment"
+    logic: |
+      deny[msg] {
+        input.kind == "Deployment"
+        container := input.spec.template.spec.containers[_]
+        not container.resources.limits
+        msg := sprintf("Container '%s' does not have resource limits defined", [container.name])
+      }
+  
+  # Check for non-root user in Dockerfiles
+  - id: "CUSTOM-DOCKER-001"
+    name: "Docker containers should run as non-root user"
+    severity: "medium"
+    resource_type: "dockerfile"
+    logic: |
+      deny[msg] {
+        input[i].Cmd == "user"
+        input[i].Value == ["root"]
+        msg := "Container is running as root user"
+      }
+
+# Severity thresholds
+severity_threshold: "medium"
+
+# Fail build on policy violations
+fail_on_violation: true
+
+# Output preferences
+output:
+  format: "sarif"
+  verbose: true
+  show_passed_checks: false

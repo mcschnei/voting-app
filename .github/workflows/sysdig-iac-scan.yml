@@ -1,0 +1,60 @@
+name: Sysdig IaC Scan
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  sysdig-iac-scan:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Sysdig Secure IaC Scan
+      uses: sysdiglabs/sysdig-secure-inline-scan@v1
+      with:
+        # Sysdig Secure endpoint URL
+        sysdig-secure-url: https://secure.sysdig.com
+        
+        # Sysdig Secure API token - store this as a GitHub secret
+        sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
+        
+        # Path to scan (current directory by default)
+        path: .
+        
+        # IaC scan specific options
+        iac-scan: true
+        
+        # Skip image scanning since this is IaC only
+        skip-upload: true
+        
+        # Fail the build on high severity findings (optional)
+        stop-on-failed-policy: true
+        
+        # Minimum severity to report (low, medium, high, critical)
+        minimum-severity: medium
+        
+        # Output format (json, sarif, human)
+        output-format: sarif
+        
+        # Save results to file
+        output-file: sysdig-iac-results.sarif
+        
+    - name: Upload SARIF results to GitHub
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: sysdig-iac-results.sarif
+        
+    - name: Upload scan results as artifact
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: sysdig-iac-scan-results
+        path: sysdig-iac-results.sarif
+        retention-days: 30
