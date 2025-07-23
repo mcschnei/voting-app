@@ -1,4 +1,4 @@
-name: Sysdig IaC Scan
+name: Sysdig Security Scan
 
 on:
   push:
@@ -9,52 +9,91 @@ on:
 
 jobs:
   sysdig-iac-scan:
+    name: IaC Security Scan
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Sysdig IaC Scan
-      id: scan
-      uses: sysdiglabs/scan-action@v5
+    - name: Scan Infrastructure as Code
+      id: iac-scan
+      uses: sysdiglabs/scan-action@v6
       with:
+        # Set mode to IaC scanning
         mode: iac
+        
+        # Path to scan - root directory to scan all IaC files
         iac-scan-path: .
+        
+        # Scan recursively through all directories
         recursive: true
+        
+        # Sysdig API token from GitHub secrets
         sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
-        sysdig-secure-url: https://eu1.app.sysdig.com
-        minimum-severity: high
+        
+        # Sysdig endpoint (default is US)
+        sysdig-secure-url: https://secure.sysdig.com
+        
+        # Use latest CLI scanner version that supports IaC
+        cli-scanner-version: 1.22.3
+        
+        # Minimum severity to report (low, medium, high, critical)
+        minimum-severity: medium
+        
+        # Don't fail the build on findings (set to true to fail on issues)
         stop-on-failed-policy-eval: false
+        
+        # Don't fail on scanner errors
         stop-on-processing-error: false
-        cli-scanner-version: 1.9.0
         
-    - name: Check for SARIF file
-      id: check_sarif
-      run: |
-        if [ -f "${{ github.workspace }}/sarif.json" ]; then
-          echo "sarif_exists=true" >> $GITHUB_OUTPUT
-          echo "SARIF file found"
-        else
-          echo "sarif_exists=false" >> $GITHUB_OUTPUT
-          echo "No SARIF file generated"
-        fi
-        
-    - name: Upload SARIF results to GitHub Security tab
+    - name: Upload SARIF results
+      # Upload even if scan step fails
+      if: success() || failure()
       uses: github/codeql-action/upload-sarif@v3
-      if: steps.check_sarif.outputs.sarif_exists == 'true'
       with:
         sarif_file: ${{ github.workspace }}/sarif.json
-        
-    - name: Display scan summary
-      if: always()
+
+  sysdig-image-scan:
+    name: Container Image Scan
+    runs-on: ubuntu-latest
+    # Only run on main branch pushes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    strategy:
+      matrix:
+        service:
+          - vote
+          - result
+          - worker
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Build Docker image
       run: |
-        echo "## Sysdig IaC Scan Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        if [ "${{ steps.check_sarif.outputs.sarif_exists }}" == "true" ]; then
-          echo "✅ Scan completed and SARIF report generated" >> $GITHUB_STEP_SUMMARY
-          echo "View results in the Security tab" >> $GITHUB_STEP_SUMMARY
-        else
-          echo "⚠️ Scan completed but no SARIF report was generated" >> $GITHUB_STEP_SUMMARY
-          echo "This may mean no issues were found or the scan needs configuration" >> $GITHUB_STEP_SUMMARY
-        fi
+        cd ${{ matrix.service }}
+        docker build -t voting-app-${{ matrix.service }}:${{ github.sha }} .
+        
+    - name: Scan Docker image
+      uses: sysdiglabs/scan-action@v6
+      with:
+        # Image to scan
+        image-tag: voting-app-${{ matrix.service }}:${{ github.sha }}
+        
+        # Sysdig credentials
+        sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
+        sysdig-secure-url: https://eu1.app.sysdig.com
+        
+        # Severity filter
+        severity-at-least: high
+        
+        # Fail on critical vulnerabilities
+        stop-on-failed-policy-eval: true
+        
+    - name: Upload SARIF results
+      if: success() || failure()
+      uses: github/codeql-action/upload-sarif@v3
+      with:
+        sarif_file: ${{ github.workspace }}/sarif.json
+        category: image-${{ matrix.service }}
