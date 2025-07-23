@@ -1,0 +1,48 @@
+# test-vulnerable.yaml
+# This file contains intentional security issues to test if Sysdig is scanning properly
+# DO NOT use this in production!
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vulnerable-voting-app
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: vulnerable-test
+  template:
+    metadata:
+      labels:
+        app: vulnerable-test
+    spec:
+      # BAD: No security context
+      containers:
+      - name: vulnerable-container
+        image: nginx:latest  # BAD: Using latest tag
+        ports:
+        - containerPort: 80
+          hostPort: 80       # BAD: Using host network
+        securityContext:
+          privileged: true   # BAD: Running privileged
+          runAsUser: 0       # BAD: Running as root
+          runAsNonRoot: false
+          allowPrivilegeEscalation: true  # BAD: Allows escalation
+          capabilities:
+            add:
+              - ALL          # BAD: All capabilities
+        # BAD: No resource limits
+        # BAD: No liveness/readiness probes
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vulnerable-service
+spec:
+  type: NodePort        # BAD: Exposing NodePort
+  ports:
+  - port: 80
+    targetPort: 80
+    nodePort: 30080     # BAD: Fixed nodePort
+  selector:
+    app: vulnerable-test
