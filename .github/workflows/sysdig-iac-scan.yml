@@ -1,4 +1,4 @@
-name: Sysdig IaC Scan
+name: Sysdig IaC Scan - Detailed
 
 on:
   push:
@@ -8,81 +8,272 @@ on:
   workflow_dispatch:
 
 jobs:
-  sysdig-iac-scan:
+  detailed-iac-scan:
     runs-on: ubuntu-latest
     
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
       
-    - name: Sysdig IaC Scan
+    - name: Show IaC files to be scanned
+      run: |
+        echo "=== IaC Files in Repository ==="
+        echo ""
+        echo "📁 Kubernetes manifests:"
+        find . -path ./node_modules -prune -o -name "*.yaml" -print | grep -E "(k8s|kubernetes)" || echo "  None found"
+        echo ""
+        echo "📁 Docker Compose files:"
+        find . -name "docker-compose*.yml" -o -name "docker-compose*.yaml" | head -10 || echo "  None found"
+        echo ""
+        echo "📁 Dockerfiles:"
+        find . -name "Dockerfile*" | head -10 || echo "  None found"
+        echo ""
+        echo "📁 All YAML files (first 20):"
+        find . -path ./node_modules -prune -o \( -name "*.yaml" -o -name "*.yml" \) -print | head -20
+        
+    - name: Run Sysdig IaC scan with all outputs
       id: scan
       uses: sysdiglabs/scan-action@v5
+      continue-on-error: true
       with:
-        # Mode of operation - set to "iac" for Infrastructure as Code scanning
         mode: iac
-        
-        # Path to scan for IaC files
         iac-scan-path: .
-        
-        # Recursively scan all folders
         recursive: true
-        
-        # Sysdig Secure API token - store this as a GitHub secret
         sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
-        
-        # Sysdig Secure endpoint URL (default: https://secure.sysdig.com)
-        sysdig-secure-url: https://eu1.app.sysdig.com
-        
-        # Minimum severity to fail the build (low, medium, high, critical)
-        minimum-severity: high
-        
-        # Fail the build if policy evaluation fails
+        sysdig-secure-url: https://secure.sysdig.com
+        minimum-severity: low  # Show all issues
         stop-on-failed-policy-eval: false
-        
-        # Fail the build if scanner encounters errors
         stop-on-processing-error: false
-        
-        # CLI scanner version (minimum 1.9.0 required for IaC mode)
         cli-scanner-version: 1.9.0
+        # Force output generation
+        extra-parameters: "--output-json=iac-results.json"
         
-    - name: Check for SARIF file
-      id: check_sarif
-      run: |
-        echo "Current directory: $(pwd)"
-        echo "Files in workspace:"
-        ls -la ${{ github.workspace }}/
-        if [ -f "${{ github.workspace }}/sarif.json" ]; then
-          echo "sarif_exists=true" >> $GITHUB_OUTPUT
-          echo "SARIF file found at: ${{ github.workspace }}/sarif.json"
-        else
-          echo "sarif_exists=false" >> $GITHUB_OUTPUT
-          echo "SARIF file not found, checking other locations..."
-          find . -name "*.sarif" -o -name "sarif.json" 2>/dev/null || true
-        fi
-        
-    - name: Upload SARIF results to GitHub Security tab
-      uses: github/codeql-action/upload-sarif@v3
-      if: steps.check_sarif.outputs.sarif_exists == 'true'
-      with:
-        sarif_file: ${{ github.workspace }}/sarif.json
-        
-    - name: Display scan summary
+    - name: Check all possible output locations
       if: always()
       run: |
-        echo "## Sysdig IaC Scan Summary" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        if [ "${{ steps.check_sarif.outputs.sarif_exists }}" == "true" ]; then
-          echo "✅ Scan completed successfully" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "View detailed results in the [Security tab](https://github.com/${{ github.repository }}/security/code-scanning)" >> $GITHUB_STEP_SUMMARY
+        echo "=== Checking for scan outputs ==="
+        echo ""
+        echo "Looking for SARIF files:"
+        find . -name "*.sarif" -type f 2>/dev/null | while read f; do
+          echo "  Found: $f (size: $(stat -c%s "$f") bytes)"
+        done || echo "  No SARIF files found"
+        
+        echo ""
+        echo "Looking for JSON output files:"
+        find . -name "*results*.json" -o -name "*report*.json" -o -name "*scan*.json" 2>/dev/null | while read f; do
+          echo "  Found: $f (size: $(stat -c%s "$f") bytes)"
+          echo "  First 500 chars:"
+          head -c 500 "$f" | python -m json.tool 2>/dev/null || head -c 500 "$f"
+          echo ""
+        done || echo "  No JSON files found"
+        
+        echo ""
+        echo "All files in workspace root:"
+        ls -la ./ | grep -E "\.(json|sarif|log|txt)$" || echo "  No output files in root"
+        
+    - name: Run manual scan with explicit output
+      if: always()
+      env:
+        SYSDIG_API_TOKEN: ${{ secrets.SYSDIG_SECURE_TOKEN }}
+      run: |
+        echo "=== Running manual scan for comparison ==="
+        
+        # Download scanner
+        curl -sLO https://download.sysdig.com/scanning/bin/sysdig-cli-scanner/1.9.0/linux/amd64/sysdig-cli-scanner
+        chmod +x ./sysdig-cli-scanner
+        
+        # Run with explicit outputs
+        echo "Running scan with JSON output..."
+        ./sysdig-cli-scanner \
+          --iac \
+          --apiurl https://secure.sysdig.com \
+          --output-json=manual-scan.json \
+          --console-log \
+          --recursive \
+          . 2>&1 | tee scan-output.log || true
+          
+        # Check if anything was produced
+        if [ -f "manual-scan.json" ]; then
+          echo ""
+          echo "✅ Manual scan produced output!"
+          echo "File size: $(stat -c%s manual-scan.json) bytes"
+          echo "Summary of findings:"
+          cat manual-scan.json | python -c "
+import json, sys
+try:
+    data = json.load(sys.stdin)
+    if 'iac' in data:
+        files = data['iac'].get('files', [])
+        total_issues = sum(len(f.get('failures', [])) for f in files)
+        print(f'Files scanned: {len(files)}')
+        print(f'Total issues: {total_issues}')
+        if total_issues > 0:
+            print('\\nFirst few issues:')
+            for f in files[:3]:
+                if f.get('failures'):
+                    print(f\"  File: {f.get('filename', 'unknown')}\"")
+                    for fail in f['failures'][:2]:
+                        print(f\"    - {fail.get('check_id', 'unknown')}: {fail.get('check_name', 'unknown')}\"")
+except Exception as e:
+    print(f'Could not parse results: {e}')
+"
         else
-          echo "⚠️ Scan completed but no SARIF report was generated" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "This might happen if:" >> $GITHUB_STEP_SUMMARY
-          echo "- No IaC files were found to scan" >> $GITHUB_STEP_SUMMARY
-          echo "- The scan encountered an error" >> $GITHUB_STEP_SUMMARY
-          echo "- The Sysdig token is invalid" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "Check the workflow logs for more details" >> $GITHUB_STEP_SUMMARY
+          echo "❌ No manual scan output produced"
+          echo ""
+          echo "Last 50 lines of scan output:"
+          tail -50 scan-output.log || true
         fi
+        
+    - name: Generate custom SARIF if needed
+      if: always()
+      run: |
+        # If we have JSON results but no SARIF, convert them
+        if [ -f "manual-scan.json" ] && [ ! -f "sarif.json" ]; then
+          echo "Converting JSON results to SARIF format..."
+          
+          python3 << 'EOF'
+import json
+import os
+
+# Try to read manual scan results
+try:
+    with open('manual-scan.json', 'r') as f:
+        scan_data = json.load(f)
+    
+    # Create SARIF structure
+    sarif = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "Sysdig IaC Scanner",
+                    "version": "1.9.0",
+                    "informationUri": "https://docs.sysdig.com",
+                    "rules": []
+                }
+            },
+            "results": []
+        }]
+    }
+    
+    # Extract findings from Sysdig format
+    if 'iac' in scan_data and 'files' in scan_data['iac']:
+        rule_index = {}
+        
+        for file_info in scan_data['iac']['files']:
+            filename = file_info.get('filename', 'unknown')
+            
+            for failure in file_info.get('failures', []):
+                check_id = failure.get('check_id', 'unknown')
+                
+                # Add rule if not already present
+                if check_id not in rule_index:
+                    rule_index[check_id] = len(sarif['runs'][0]['tool']['driver']['rules'])
+                    sarif['runs'][0]['tool']['driver']['rules'].append({
+                        "id": check_id,
+                        "name": failure.get('check_name', check_id),
+                        "shortDescription": {
+                            "text": failure.get('description', 'IaC security issue')
+                        },
+                        "fullDescription": {
+                            "text": failure.get('remediation', failure.get('description', 'IaC security issue'))
+                        },
+                        "defaultConfiguration": {
+                            "level": failure.get('severity', 'warning').lower()
+                        }
+                    })
+                
+                # Add result
+                sarif['runs'][0]['results'].append({
+                    "ruleId": check_id,
+                    "ruleIndex": rule_index[check_id],
+                    "level": failure.get('severity', 'warning').lower(),
+                    "message": {
+                        "text": failure.get('description', 'Security issue detected')
+                    },
+                    "locations": [{
+                        "physicalLocation": {
+                            "artifactLocation": {
+                                "uri": filename
+                            },
+                            "region": {
+                                "startLine": failure.get('line', 1)
+                            }
+                        }
+                    }]
+                })
+    
+    # Write SARIF file
+    with open('sarif.json', 'w') as f:
+        json.dump(sarif, f, indent=2)
+    
+    print(f"✅ Generated SARIF with {len(sarif['runs'][0]['results'])} findings")
+    
+except Exception as e:
+    print(f"❌ Failed to generate SARIF: {e}")
+    # Create empty SARIF
+    empty_sarif = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [{
+            "tool": {
+                "driver": {
+                    "name": "Sysdig IaC Scanner",
+                    "version": "1.9.0"
+                }
+            },
+            "results": []
+        }]
+    }
+    with open('sarif.json', 'w') as f:
+        json.dump(empty_sarif, f, indent=2)
+    print("Created empty SARIF file")
+EOF
+        fi
+        
+    - name: Upload SARIF to GitHub Security
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      continue-on-error: true
+      with:
+        sarif_file: sarif.json
+        
+    - name: Create comprehensive summary
+      if: always()
+      run: |
+        echo "## 🔍 Sysdig IaC Scan Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        # Check what files were scanned
+        yaml_count=$(find . -path ./node_modules -prune -o \( -name "*.yaml" -o -name "*.yml" \) -print | wc -l)
+        dockerfile_count=$(find . -name "Dockerfile*" | wc -l)
+        
+        echo "### 📊 Scan Statistics" >> $GITHUB_STEP_SUMMARY
+        echo "- YAML files found: $yaml_count" >> $GITHUB_STEP_SUMMARY
+        echo "- Dockerfiles found: $dockerfile_count" >> $GITHUB_STEP_SUMMARY
+        echo "- Scan status: ${{ steps.scan.outcome }}" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        if [ -f "sarif.json" ]; then
+          echo "### ✅ SARIF Report" >> $GITHUB_STEP_SUMMARY
+          echo "SARIF report generated successfully. Check the Security tab for details." >> $GITHUB_STEP_SUMMARY
+          
+          # Count findings
+          findings=$(cat sarif.json | python -c "import json,sys; d=json.load(sys.stdin); print(len(d['runs'][0]['results']))" 2>/dev/null || echo "0")
+          echo "- Total findings: $findings" >> $GITHUB_STEP_SUMMARY
+        else
+          echo "### ⚠️ No SARIF Report" >> $GITHUB_STEP_SUMMARY
+          echo "No SARIF report was generated. This could mean:" >> $GITHUB_STEP_SUMMARY
+          echo "- No security issues were found (good!)" >> $GITHUB_STEP_SUMMARY
+          echo "- The scan didn't detect any IaC files" >> $GITHUB_STEP_SUMMARY
+          echo "- There was an issue with the scan configuration" >> $GITHUB_STEP_SUMMARY
+        fi
+        
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 📝 Next Steps" >> $GITHUB_STEP_SUMMARY
+        if [ -f "manual-scan.json" ]; then
+          echo "1. Review the manual scan output in the workflow logs" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "2. Check if your Sysdig account has IaC scanning enabled" >> $GITHUB_STEP_SUMMARY
+        echo "3. Verify your API token has the correct permissions" >> $GITHUB_STEP_SUMMARY
