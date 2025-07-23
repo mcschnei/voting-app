@@ -23,7 +23,7 @@ jobs:
         iac-scan-path: .
         recursive: true
         sysdig-secure-token: ${{ secrets.SYSDIG_SECURE_TOKEN }}
-        sysdig-secure-url: https://secure.sysdig.com
+        sysdig-secure-url: https://eu1.app.sysdig.com
         minimum-severity: high
         stop-on-failed-policy-eval: false
         stop-on-processing-error: false
